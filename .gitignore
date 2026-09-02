@@ -6,3 +6,4 @@ data/quiz.db-shm
 .streamlit/secrets.toml
 .venv/
 venv/
+url
