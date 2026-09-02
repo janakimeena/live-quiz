@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+data/quiz.db
+data/quiz.db-wal
+data/quiz.db-shm
+.streamlit/secrets.toml
+.venv/
+venv/

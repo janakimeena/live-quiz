@@ -1,0 +1,9 @@
+question,type,option_a,option_b,option_c,option_d,correct_answer,time_limit
+"Which technique combines retrieval with text generation?","MCQ","CNN","RAG","GAN","PCA","B",30
+"What does NLP stand for?","MCQ","Natural Language Processing","Neural Language Program","Natural Learning Process","None of these","A",30
+"RAG stands for Retrieval-Augmented Generation.","TF","","","","","True",20
+"A transformer model uses a recurrent neural network internally.","TF","","","","","False",20
+"Which of these is a vector database commonly used for RAG?","MCQ","Redis","FAISS","MySQL","Kafka","B",30
+"Fine-tuning always requires more data than prompt engineering.","TF","","","","","False",20
+"Which component converts text into numerical vectors?","MCQ","Tokenizer","Embedding model","Decoder","Scheduler","B",30
+"Temperature 0 makes an LLM's output more deterministic.","TF","","","","","True",20
