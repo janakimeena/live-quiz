@@ -102,8 +102,14 @@ removed by hand from the host **Create / Load** tab.
    admin_password = "your-strong-password"
    ```
 
-5. (Optional) In **Settings → Advanced / environment**, set
-   `QUIZ_PUBLIC_URL` to the app's public URL to show a QR code on the host page.
+5. After the app is live, copy its URL and add it to the same Secrets box so the
+   host console shows a share link + QR code:
+
+   ```toml
+   admin_password = "your-strong-password"
+   public_url     = "https://your-app.streamlit.app"
+   ```
+
 6. Share `https://your-app.streamlit.app/` (participants) and
    `https://your-app.streamlit.app/?role=host` (faculty).
 

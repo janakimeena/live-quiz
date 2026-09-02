@@ -30,13 +30,26 @@ SAMPLE_CSV_PATH = os.path.join(os.path.dirname(__file__), "sample_questions.csv"
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _setting(*names: str, default: str = "") -> str:
+    """Look a value up in st.secrets first, then environment variables."""
+    for name in names:
+        try:
+            if name in st.secrets:
+                return str(st.secrets[name])
+        except Exception:
+            pass
+        val = os.environ.get(name)
+        if val:
+            return val
+    return default
+
+
 def get_admin_password() -> str:
-    try:
-        if "admin_password" in st.secrets:
-            return str(st.secrets["admin_password"])
-    except Exception:
-        pass
-    return os.environ.get("QUIZ_ADMIN_PASSWORD", "admin123")
+    return _setting("admin_password", "QUIZ_ADMIN_PASSWORD", default="admin123")
+
+
+def get_public_url() -> str:
+    return _setting("public_url", "QUIZ_PUBLIC_URL").rstrip("/")
 
 
 def fmt_date(iso: str) -> str:
@@ -339,7 +352,7 @@ def _host_create_load() -> None:
         c1.metric("Quiz code", quiz["code"])
         c2.metric("Questions", db.question_count(quiz["id"]))
         c3.metric("Status", quiz["status"])
-        public_url = os.environ.get("QUIZ_PUBLIC_URL", "").rstrip("/")
+        public_url = get_public_url()
         if public_url:
             st.write(f"**Share this link:** {public_url}/")
             img = qr_image(public_url + "/")
@@ -348,7 +361,8 @@ def _host_create_load() -> None:
         else:
             st.info(
                 "Share this app's URL with participants, along with the quiz code above. "
-                "Set the `QUIZ_PUBLIC_URL` environment variable to show a QR code here."
+                "Add `public_url = \"https://your-app.streamlit.app\"` to the app secrets "
+                "to show a shareable link and QR code here."
             )
         _host_manage_questions(quiz)
 
