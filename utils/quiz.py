@@ -6,6 +6,7 @@ isolation and reused by the report generator.
 from __future__ import annotations
 
 import io
+import math
 import time
 from typing import Any
 
@@ -200,6 +201,31 @@ def option_letters(question: dict) -> list[str]:
 # Live-question state
 # ---------------------------------------------------------------------------
 
+def elapsed_since(started_at: float | None, now: float | None = None) -> float:
+    """Seconds since the question was started (0 if it hasn't been)."""
+    if not started_at:
+        return 0.0
+    now = time.time() if now is None else now
+    return max(0.0, now - started_at)
+
+
+def remaining_seconds(
+    started_at: float | None, time_limit: float, now: float | None = None
+) -> int:
+    """Whole seconds left on a question — the single source of truth for every
+    clock in the app.
+
+    Rounds *up*, so a 30 s question reads "30" the instant it starts and "1"
+    during its final second; 0 means the question is over. The host's elapsed
+    counter is derived from this (``time_limit - remaining``), so the two
+    screens can never disagree.
+    """
+    if not started_at:
+        return int(time_limit)
+    left = time_limit - elapsed_since(started_at, now)
+    return max(0, min(int(time_limit), math.ceil(left)))
+
+
 def question_closed(
     current_status: str,
     started_at: float | None,
@@ -210,10 +236,14 @@ def question_closed(
 ) -> bool:
     """A running question is *closed* once either its time limit has elapsed or
     every registered participant has submitted an answer. The host cannot move
-    to the next question until this is true."""
+    to the next question until this is true.
+
+    The time condition is exactly ``remaining_seconds(...) == 0``, so the
+    countdown a participant sees and the moment the question actually closes are
+    the same event.
+    """
     if current_status != "active" or not started_at:
         return False
-    now = time.time() if now is None else now
-    if now - started_at >= time_limit:
+    if remaining_seconds(started_at, time_limit, now) == 0:
         return True
     return n_participants > 0 and n_answered >= n_participants

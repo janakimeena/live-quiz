@@ -142,6 +142,7 @@ server, or a laptop on the classroom Wi-Fi.
 python tests/simulate.py         # quiz lifecycle + scoring + reports, no browser
 python tests/test_apptest.py     # renders every screen via Streamlit AppTest
 python tests/test_integration.py # full host + 2-participant live loop
+python tests/test_timer.py       # countdown + host/participant clock agreement
 ```
 
 `simulate.py` covers CSV parsing, 10 participants, duplicate registration
@@ -170,7 +171,8 @@ Interactive quiz/
 ├── tests/
 │   ├── simulate.py
 │   ├── test_apptest.py
-│   └── test_integration.py
+│   ├── test_integration.py
+│   └── test_timer.py
 └── .streamlit/
     ├── config.toml
     └── secrets.toml.example

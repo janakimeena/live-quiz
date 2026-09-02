@@ -59,6 +59,11 @@ def question_closed(quiz: dict, question: dict, n_participants: int, n_answered:
     )
 
 
+def _time_taken(started_at: float | None, question: dict) -> float:
+    """Answering time to store, never more than the question's time limit."""
+    return min(float(question["time_limit"]), quizlib.elapsed_since(started_at))
+
+
 def _advance_quiz(quiz: dict, idx: int, is_last: bool) -> None:
     if is_last:
         db.set_quiz_field(quiz["id"], status="finished")
@@ -225,7 +230,8 @@ def _question_screen(quiz_id: int, participant: dict) -> None:
     if closed:
         if existing is None:
             selected = st.session_state.get(f"ans_{q['id']}")
-            db.submit_response(quiz_id, participant["id"], q, selected, q["time_limit"])
+            db.submit_response(quiz_id, participant["id"], q, selected,
+                               _time_taken(started_at, q))
             st.rerun()
             return
         if existing["selected_answer"]:
@@ -238,19 +244,19 @@ def _question_screen(quiz_id: int, participant: dict) -> None:
             _participant_leaderboard(quiz_id, participant)
         return
 
-    remaining = q["time_limit"] - (time.time() - started_at)
+    remaining = quizlib.remaining_seconds(started_at, q["time_limit"])
 
     if existing is not None:
         st.success(f"Answer recorded: **{existing['selected_answer'] or '—'}**")
         st.caption(
             f"{n_answered} of {n_participants} answered  ·  "
-            f"question closes in {int(max(0, remaining))}s (or when everyone has answered)"
+            f"question closes in {remaining}s (or when everyone has answered)"
         )
         return
 
-    st.progress(max(0.0, min(1.0, remaining / q["time_limit"])))
+    st.progress(remaining / q["time_limit"])
     st.caption(
-        f"⏱️ Time remaining: {int(max(0, remaining))} seconds  ·  "
+        f"⏱️ Time remaining: {remaining} seconds  ·  "
         f"{n_answered}/{n_participants} answered"
     )
 
@@ -265,8 +271,8 @@ def _question_screen(quiz_id: int, participant: dict) -> None:
         )
 
     if st.button("Submit answer", type="primary", disabled=choice is None):
-        taken = max(0.0, time.time() - started_at) if started_at else 0.0
-        db.submit_response(quiz_id, participant["id"], q, choice, taken)
+        db.submit_response(quiz_id, participant["id"], q, choice,
+                           _time_taken(started_at, q))
         st.rerun()
 
 
@@ -468,7 +474,7 @@ def _host_participants() -> None:
     st.caption("This list refreshes automatically.")
 
 
-@st.fragment(run_every=2)
+@st.fragment(run_every=1)
 def _host_control() -> None:
     quiz = _current_quiz()
     if not quiz:
@@ -504,7 +510,9 @@ def _host_control() -> None:
     n_participants = db.participant_count(quiz["id"])
     n_answered = db.answer_count(quiz["id"], q["id"])
     closed = question_closed(quiz, q, n_participants, n_answered)
-    elapsed = time.time() - quiz["current_q_started_at"] if quiz["current_q_started_at"] else 0
+    # Derived from the same countdown the participants see, so the two screens
+    # always add up to the question's time limit.
+    remaining = quizlib.remaining_seconds(quiz["current_q_started_at"], q["time_limit"])
 
     st.divider()
     st.markdown(f"### Question {idx + 1} / {n}")
@@ -513,7 +521,7 @@ def _host_control() -> None:
 
     m1, m2, m3 = st.columns(3)
     m1.metric("Answered", f"{n_answered} / {n_participants}")
-    m2.metric("Elapsed", f"{int(min(elapsed, q['time_limit']))}s / {q['time_limit']}s")
+    m2.metric("Time left", f"{remaining}s / {q['time_limit']}s")
     m3.metric("Question", "Closed ✓" if closed else "Open…")
 
     if not closed:
