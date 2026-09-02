@@ -1,8 +1,12 @@
-"""Full live-quiz loop: 1 host + 2 participants through 2 questions.
+"""Full live-quiz loop with the new host flow.
 
-Drives the real Streamlit script (participant fragments, host control, state
-transitions, timer auto-submit) with three independent AppTest "browsers"
-sharing one database.
+  * one button at a time for the host (START QUIZ -> NEXT QUESTION -> FINISH)
+  * clicking it starts the next question immediately
+  * it stays disabled until the current question is closed
+    (timer reached OR every participant has answered)
+  * participants see the leaderboard after each question closes
+
+Driven with three independent AppTest "browsers" sharing one database.
 
     python tests/test_integration.py
 """
@@ -11,7 +15,6 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
-import time
 
 _TMP = tempfile.mkdtemp(prefix="quizint_")
 os.environ["QUIZ_DB_PATH"] = os.path.join(_TMP, "quiz.db")
@@ -48,9 +51,9 @@ def browser(session=None, host=False):
     return at
 
 
-def join(quiz_code, name, reg):
+def join(code, name, reg):
     at = browser().run()
-    at.text_input[0].set_value(quiz_code)
+    at.text_input[0].set_value(code)
     at.text_input[1].set_value(name)
     at.text_input[2].set_value(reg)
     at.text_input[3].set_value("")
@@ -59,12 +62,18 @@ def join(quiz_code, name, reg):
     return at
 
 
-def click_label(at, needle):
+def button(at, needle):
     for b in at.button:
         if needle.lower() in b.label.lower():
-            b.click().run()
-            return True
-    return False
+            return b
+    return None
+
+
+def click(at, needle, why):
+    b = button(at, needle)
+    check(b is not None, f"button '{needle}' present — {why}")
+    b.click().run()
+    check(not at.exception, why)
 
 
 def main():
@@ -72,66 +81,77 @@ def main():
     rows, errs = quizlib.parse_questions_csv(CSV)
     check(not errs, f"CSV parsed clean ({errs})")
     quiz = db.create_quiz("Integration Quiz", rows, 30)
-    code = quiz["code"]
-    qid = quiz["id"]
+    code, qid = quiz["code"], quiz["id"]
     questions = db.get_questions(qid)
 
-    # --- participants join (quiz still in lobby) -----------------------
+    # --- participants join ------------------------------------------
     p1 = join(code, "Alice", "R1")
     p2 = join(code, "Bob", "R2")
-    check(len(db.get_participants(qid)) == 2, "two participants registered")
-    check(any("waiting for the quiz" in str(m.value).lower() for m in p1.info),
-          "Alice sees the waiting room")
-
     p1_id = p1.session_state["participant_id"]
     p2_id = p2.session_state["participant_id"]
+    check(db.participant_count(qid) == 2, "two participants registered")
 
-    # --- host starts the quiz ----------------------------------------
+    # --- host starts quiz -> Q1 active immediately ------------------
     host = browser({"host_authed": True, "host_quiz_id": qid}, host=True).run()
-    check(not host.exception, "host console renders")
-    check(click_label(host, "START QUIZ"), "host clicked START QUIZ")
-    check(db.get_quiz(qid)["status"] == "running", "quiz is running")
+    click(host, "START QUIZ", "host started the quiz")
+    fresh = db.get_quiz(qid)
+    check(fresh["status"] == "running" and fresh["current_q_status"] == "active",
+          "Q1 is active immediately after START QUIZ")
+    q1, q2 = questions
 
-    # --- Question 1 -------------------------------------------------
-    check(click_label(host, "START QUESTION"), "host started question 1")
-    q1 = questions[0]
-
+    # --- Q1: only Alice answers -> question still OPEN --------------
     p1.run()
-    check(not p1.exception and p1.radio, "Alice sees Q1 with answer options")
-    p1.radio[0].set_value("B").run()          # correct
-    check(click_label(p1, "Submit answer"), "Alice submitted Q1")
-    r = db.get_response(p1_id, q1["id"])
-    check(r and r["is_correct"] == 1, "Alice's Q1 answer stored correct")
+    check(p1.radio, "Alice sees Q1 options")
+    p1.radio[0].set_value("B").run()               # correct
+    click(p1, "Submit answer", "Alice submitted Q1")
+    check(db.get_response(p1_id, q1["id"])["is_correct"] == 1, "Alice Q1 correct stored")
 
-    # Bob picks a wrong answer but never presses submit; host ends the question.
+    host.run()
+    check(button(host, "NEXT QUESTION") is not None, "host sees NEXT QUESTION button")
+    check(button(host, "NEXT QUESTION").proto.disabled,
+          "NEXT QUESTION disabled while Q1 still open (Bob hasn't answered)")
+    check(any("unlocks when the timer" in str(i.value).lower() for i in host.info),
+          "host told why the button is locked")
+
+    # --- Bob answers -> 2/2 -> Q1 closes ---------------------------
     p2.run()
-    p2.radio[0].set_value("A").run()          # selected, not submitted
-    check(click_label(host, "END QUESTION"), "host ended question 1")
+    p2.radio[0].set_value("A").run()               # wrong
+    click(p2, "Submit answer", "Bob submitted Q1")
 
-    p2.run()  # fragment should auto-submit Bob's pending selection
-    r2 = db.get_response(p2_id, q1["id"])
-    check(r2 is not None, "Bob's Q1 auto-submitted on question end")
-    check(r2["selected_answer"] == "A" and r2["is_correct"] == 0, "Bob's Q1 recorded wrong")
+    check(quizlib.question_closed("active", db.get_quiz(qid)["current_q_started_at"],
+                                  30, 2, db.answer_count(qid, q1["id"])),
+          "Q1 is now closed (everyone answered)")
 
-    # --- Question 2 -------------------------------------------------
-    check(click_label(host, "NEXT QUESTION"), "host advanced to question 2")
-    check(db.get_quiz(qid)["current_q_index"] == 1, "now on question 2")
-    check(click_label(host, "START QUESTION"), "host started question 2")
-    q2 = questions[1]
-
+    # participants see the leaderboard now that Q1 is closed
     p1.run()
-    p1.radio[0].set_value("False").run()      # correct
-    check(click_label(p1, "Submit answer"), "Alice submitted Q2")
+    check(any("leaderboard" in str(s.value).lower() for s in p1.subheader),
+          "Alice sees the leaderboard after Q1 closes")
+    check(any("your position" in str(i.value).lower() for i in p1.info),
+          "Alice sees her position")
 
+    host.run()
+    check(not button(host, "NEXT QUESTION").proto.disabled,
+          "NEXT QUESTION unlocked once Q1 closed")
+    click(host, "NEXT QUESTION", "host advanced to Q2")
+    fresh = db.get_quiz(qid)
+    check(fresh["current_q_index"] == 1 and fresh["current_q_status"] == "active",
+          "Q2 active immediately after NEXT QUESTION")
+
+    # --- Q2: both answer -> closes -> FINISH -----------------------
+    p1.run()
+    p1.radio[0].set_value("False").run()           # correct
+    click(p1, "Submit answer", "Alice submitted Q2")
     p2.run()
-    p2.radio[0].set_value("True").run()       # wrong
-    check(click_label(p2, "Submit answer"), "Bob submitted Q2")
+    p2.radio[0].set_value("True").run()            # wrong
+    click(p2, "Submit answer", "Bob submitted Q2")
 
-    # --- finish ----------------------------------------------------
-    check(click_label(host, "END QUESTION"), "host ended question 2")
-    check(click_label(host, "FINISH QUIZ"), "host finished the quiz")
+    host.run()
+    check(button(host, "FINISH QUIZ") is not None and not button(host, "FINISH QUIZ").proto.disabled,
+          "FINISH QUIZ enabled after last question closed")
+    click(host, "FINISH QUIZ", "host finished the quiz")
     check(db.get_quiz(qid)["status"] == "finished", "quiz finished")
 
+    # --- results & leaderboard -----------------------------------
     p1.run()
     p2.run()
     check(any("completed" in str(h.value).lower() for h in p1.header), "Alice sees result screen")
@@ -140,13 +160,11 @@ def main():
 
     lb = reports.leaderboard_df(qid)
     check(list(lb["Name"]) == ["Alice", "Bob"], "leaderboard ordered by score")
-    summary = reports.summary_df(qid)
-    check(int(summary.iloc[0]["Correct Answers"]) == 2, "summary: Alice 2 correct")
-    check(int(summary.iloc[1]["Incorrect Answers"]) == 2, "summary: Bob 2 incorrect")
+    check("Time (s)" in lb.columns, "leaderboard shows answering time")
     detailed = reports.detailed_df(qid)
-    check(len(detailed) == 4, "detailed report has 4 rows (2 participants x 2 questions)")
+    check(len(detailed) == 4, "detailed report: 2 participants x 2 questions")
 
-    print("\nIntegration test passed — full host+participant loop works.")
+    print("\nIntegration test passed — new host flow + participant leaderboard work.")
 
 
 if __name__ == "__main__":

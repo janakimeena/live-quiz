@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS quizzes (
     current_q_index      INTEGER NOT NULL DEFAULT 0,
     current_q_status     TEXT NOT NULL DEFAULT 'pending',    -- pending | active | ended
     current_q_started_at REAL,
-    show_leaderboard     INTEGER NOT NULL DEFAULT 0,
+    show_leaderboard     INTEGER NOT NULL DEFAULT 1,
     default_time_limit   INTEGER NOT NULL DEFAULT 30,
     created_at           TEXT NOT NULL
 );
@@ -266,6 +266,13 @@ def get_participant(participant_id: int) -> dict | None:
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM participants WHERE id = ?", (participant_id,)).fetchone()
         return dict(row) if row else None
+
+
+def participant_count(quiz_id: int) -> int:
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) FROM participants WHERE quiz_id = ?", (quiz_id,)
+        ).fetchone()[0]
 
 
 def get_participants(quiz_id: int) -> list[dict]:

@@ -52,6 +52,24 @@ def get_public_url() -> str:
     return _setting("public_url", "QUIZ_PUBLIC_URL").rstrip("/")
 
 
+def question_closed(quiz: dict, question: dict, n_participants: int, n_answered: int) -> bool:
+    return quizlib.question_closed(
+        quiz["current_q_status"], quiz["current_q_started_at"],
+        question["time_limit"], n_participants, n_answered,
+    )
+
+
+def _advance_quiz(quiz: dict, idx: int, is_last: bool) -> None:
+    if is_last:
+        db.set_quiz_field(quiz["id"], status="finished")
+    else:
+        db.set_quiz_field(
+            quiz["id"], current_q_index=idx + 1,
+            current_q_status="active", current_q_started_at=time.time(),
+        )
+    st.rerun()
+
+
 def fmt_date(iso: str) -> str:
     try:
         return datetime.fromisoformat(iso).strftime("%d-%m-%Y %H:%M")
@@ -165,11 +183,21 @@ def _waiting_room(quiz: dict, participant: dict) -> None:
     st.caption("Keep this page open. It will update automatically.")
 
 
+def _participant_leaderboard(quiz_id: int, participant: dict, limit: int | None = 10) -> None:
+    df = reports.leaderboard_df(quiz_id)
+    if df.empty:
+        return
+    st.subheader("🏆 Leaderboard" + ("" if limit is None else " so far"))
+    mine = df.index[df["Registration No."] == participant["reg_no"]].tolist()
+    if mine:
+        st.info(f"Your position: **#{int(df.loc[mine[0], 'Rank'])}** of {len(df)}")
+    st.dataframe(df if limit is None else df.head(limit), hide_index=True)
+    st.caption("Ranked by score, then by total answering time.")
+
+
 @st.fragment(run_every=1)
 def _question_screen(quiz_id: int, participant: dict) -> None:
     quiz = db.get_quiz(quiz_id)
-    if quiz["status"] == "finished":
-        st.rerun(scope="app")
     if quiz["status"] != "running":
         st.rerun(scope="app")
 
@@ -180,47 +208,51 @@ def _question_screen(quiz_id: int, participant: dict) -> None:
         return
 
     q = questions[idx]
-    qstatus = quiz["current_q_status"]
-    started_at = quiz["current_q_started_at"]
-    existing = db.get_response(participant["id"], q["id"])
-
     st.subheader(f"Question {idx + 1} of {len(questions)}")
 
-    if qstatus == "pending":
-        st.info("Get ready — the host will start this question shortly.")
+    if quiz["current_q_status"] != "active":
+        st.info("Get ready — the quiz is starting.")
         return
 
-    st.write(f"### {q['question']}")
+    started_at = quiz["current_q_started_at"]
+    n_participants = db.participant_count(quiz_id)
+    n_answered = db.answer_count(quiz_id, q["id"])
+    existing = db.get_response(participant["id"], q["id"])
+    closed = question_closed(quiz, q, n_participants, n_answered)
 
-    remaining = None
-    if qstatus == "active" and started_at:
-        remaining = q["time_limit"] - (time.time() - started_at)
+    st.markdown(f"### {q['question']}")
+
+    if closed:
+        if existing is None:
+            selected = st.session_state.get(f"ans_{q['id']}")
+            db.submit_response(quiz_id, participant["id"], q, selected, q["time_limit"])
+            st.rerun()
+            return
+        if existing["selected_answer"]:
+            st.success(f"Your answer: **{existing['selected_answer']}**")
+        else:
+            st.warning("You did not answer this question.")
+        st.caption("Question closed. Waiting for the host to continue…")
+        if quiz["show_leaderboard"]:
+            st.divider()
+            _participant_leaderboard(quiz_id, participant)
+        return
+
+    remaining = q["time_limit"] - (time.time() - started_at)
 
     if existing is not None:
-        if existing["selected_answer"]:
-            st.success(f"Your answer (**{existing['selected_answer']}**) has been recorded.")
-        else:
-            st.warning("Recorded as unanswered.")
-        if qstatus == "ended":
-            st.caption("Question closed. Waiting for the next one…")
-        else:
-            st.caption("Waiting for the other participants…")
+        st.success(f"Answer recorded: **{existing['selected_answer'] or '—'}**")
+        st.caption(
+            f"{n_answered} of {n_participants} answered  ·  "
+            f"question closes in {int(max(0, remaining))}s (or when everyone has answered)"
+        )
         return
 
-    # No answer yet.
-    if qstatus == "ended" or (remaining is not None and remaining <= 0):
-        selected = st.session_state.get(f"ans_{q['id']}")
-        taken = q["time_limit"]
-        if started_at:
-            taken = min(q["time_limit"], max(0.0, time.time() - started_at))
-        db.submit_response(quiz_id, participant["id"], q, selected, taken)
-        st.rerun()
-        return
-
-    # Active with time left — show the answer widget.
-    if remaining is not None:
-        st.progress(max(0.0, min(1.0, remaining / q["time_limit"])))
-        st.caption(f"⏱️ Time remaining: {int(max(0, remaining))} seconds")
+    st.progress(max(0.0, min(1.0, remaining / q["time_limit"])))
+    st.caption(
+        f"⏱️ Time remaining: {int(max(0, remaining))} seconds  ·  "
+        f"{n_answered}/{n_participants} answered"
+    )
 
     if q["type"] == "TF":
         choice = st.radio("Your answer", ["True", "False"], index=None, key=f"ans_{q['id']}")
@@ -247,14 +279,14 @@ def _result_screen(quiz: dict, participant: dict) -> None:
     st.header("✅ Quiz completed")
     st.write(f"**Participant:** {participant['name']}")
     st.write(f"**Registration Number:** {participant['reg_no']}")
-    st.metric("Score", f"{score} / {total_q}")
-    st.metric("Percentage", f"{pct}%")
+    c1, c2 = st.columns(2)
+    c1.metric("Score", f"{score} / {total_q}")
+    c2.metric("Percentage", f"{pct}%")
     st.success("Thank you for participating!")
 
     if quiz["show_leaderboard"]:
         st.divider()
-        st.subheader("🏆 Leaderboard")
-        st.dataframe(reports.leaderboard_df(quiz["id"]), hide_index=True)
+        _participant_leaderboard(quiz["id"], participant, limit=None)
 
     st.divider()
     if st.button("Leave / join another quiz"):
@@ -436,6 +468,7 @@ def _host_participants() -> None:
     st.caption("This list refreshes automatically.")
 
 
+@st.fragment(run_every=2)
 def _host_control() -> None:
     quiz = _current_quiz()
     if not quiz:
@@ -444,68 +477,68 @@ def _host_control() -> None:
 
     questions = db.get_questions(quiz["id"])
     n = len(questions)
-    st.write(f"**{quiz['title']}** · code **{quiz['code']}** · {n} questions")
-    st.write(f"Status: **{quiz['status']}**")
+    st.write(f"**{quiz['title']}**  ·  code **{quiz['code']}**  ·  {n} questions  ·  "
+             f"status: **{quiz['status']}**")
 
     if quiz["status"] == "lobby":
+        st.caption("Starting the quiz immediately begins Question 1 and its timer.")
         if st.button("▶️ START QUIZ", type="primary", disabled=n == 0):
             db.set_quiz_field(quiz["id"], status="running", current_q_index=0,
-                              current_q_status="pending", current_q_started_at=None)
+                              current_q_status="active", current_q_started_at=time.time())
             st.rerun()
+        _host_leaderboard_toggle(quiz)
         return
 
     if quiz["status"] == "finished":
-        st.success("Quiz finished.")
+        st.success("Quiz finished. See the Leaderboard and Reports tabs.")
         if st.button("Re-open quiz (back to lobby)"):
             db.set_quiz_field(quiz["id"], status="lobby", current_q_index=0,
                               current_q_status="pending", current_q_started_at=None)
             st.rerun()
+        _host_leaderboard_toggle(quiz)
         return
 
     idx = quiz["current_q_index"]
     q = questions[idx]
+    is_last = idx + 1 >= n
+    n_participants = db.participant_count(quiz["id"])
+    n_answered = db.answer_count(quiz["id"], q["id"])
+    closed = question_closed(quiz, q, n_participants, n_answered)
+    elapsed = time.time() - quiz["current_q_started_at"] if quiz["current_q_started_at"] else 0
+
     st.divider()
-    st.write(f"### Question {idx + 1} / {n}")
+    st.markdown(f"### Question {idx + 1} / {n}")
     st.write(q["question"])
-    st.caption(f"Type: {q['type']} · Correct: {q['correct_answer']} · Limit: {q['time_limit']}s")
+    st.caption(f"Type: {q['type']}  ·  Correct: **{q['correct_answer']}**  ·  Limit: {q['time_limit']}s")
 
-    qstatus = quiz["current_q_status"]
-    answered = db.answer_count(quiz["id"], q["id"])
-    total_players = len(db.get_participants(quiz["id"]))
-    st.metric("Answers received", f"{answered} / {total_players}")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Answered", f"{n_answered} / {n_participants}")
+    m2.metric("Elapsed", f"{int(min(elapsed, q['time_limit']))}s / {q['time_limit']}s")
+    m3.metric("Question", "Closed ✓" if closed else "Open…")
 
-    if qstatus == "active" and quiz["current_q_started_at"]:
-        elapsed = time.time() - quiz["current_q_started_at"]
-        st.caption(f"Elapsed: {int(elapsed)}s / {q['time_limit']}s")
+    if not closed:
+        st.info("**Next question** unlocks when the timer runs out or every "
+                "participant has answered.")
 
-    c1, c2, c3 = st.columns(3)
-    if qstatus in ("pending", "ended"):
-        if c1.button("▶️ START QUESTION", type="primary"):
-            db.set_quiz_field(quiz["id"], current_q_status="active",
-                              current_q_started_at=time.time())
-            st.rerun()
-    if qstatus == "active":
-        if c1.button("⏹️ END QUESTION"):
-            db.set_quiz_field(quiz["id"], current_q_status="ended")
-            st.rerun()
+    label = "🏁 FINISH QUIZ" if is_last else "⏭️ NEXT QUESTION"
+    if st.button(label, type="primary", disabled=not closed):
+        _advance_quiz(quiz, idx, is_last)
 
-    if qstatus == "ended":
-        if idx + 1 < n:
-            if c2.button("⏭️ NEXT QUESTION", type="primary"):
-                db.set_quiz_field(quiz["id"], current_q_index=idx + 1,
-                                  current_q_status="pending", current_q_started_at=None)
-                st.rerun()
-        else:
-            if c2.button("🏁 FINISH QUIZ", type="primary"):
-                db.set_quiz_field(quiz["id"], status="finished")
-                st.rerun()
+    with st.expander("Emergency override"):
+        st.caption("Only use this if a participant's device is stuck and you cannot "
+                   "wait for the timer.")
+        if st.button(f"Force {'finish' if is_last else 'next question'} now"):
+            _advance_quiz(quiz, idx, is_last)
 
-    if c3.button("🔄 Refresh"):
-        st.rerun()
+    _host_leaderboard_toggle(quiz)
 
+
+def _host_leaderboard_toggle(quiz: dict) -> None:
     st.divider()
-    show = st.toggle("Show leaderboard to participants on their result screen",
-                     value=bool(quiz["show_leaderboard"]))
+    show = st.toggle(
+        "Show leaderboard to participants (after each question and on their result screen)",
+        value=bool(quiz["show_leaderboard"]),
+    )
     if show != bool(quiz["show_leaderboard"]):
         db.set_quiz_field(quiz["id"], show_leaderboard=1 if show else 0)
         st.rerun()

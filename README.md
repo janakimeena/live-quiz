@@ -6,8 +6,13 @@ no external services.
 
 * Multiple-choice and True/False questions
 * Participants join with a **quiz code** + name + registration number
-* Host-controlled flow: start quiz → start question → end question → next
-* Per-question timer with automatic submission
+* Host-controlled flow: one button at a time — **START QUIZ → NEXT QUESTION → … → FINISH QUIZ**
+* Clicking the button starts the next question (and its timer) immediately; it stays
+  locked until the current question closes — i.e. the time limit is reached **or**
+  every participant has answered
+* Per-question timer with automatic submission when it expires
+* Participants see a live **leaderboard after every question** (score, then total
+  answering time as the tie-breaker); host can turn this off
 * Faculty leaderboard and **CSV report download** (Excel-compatible)
 * Everything is saved to SQLite immediately, so a browser refresh recovers
 
@@ -45,11 +50,15 @@ Open the app:
 3. Note the **quiz code** shown (e.g. `AB3KP`). Share the app URL + code with
    students (WhatsApp / email / projector / QR code).
 4. **Participants** tab → watch students join (auto-refreshes).
-5. **Quiz Control** tab → **START QUIZ**, then for each question:
-   **START QUESTION** → (watch answers come in / timer) → **END QUESTION** →
-   **NEXT QUESTION**. After the last question → **FINISH QUIZ**.
-6. **Leaderboard** tab → live ranking. Optionally toggle "show leaderboard to
-   participants".
+5. **Quiz Control** tab → **START QUIZ** (this immediately shows Question 1 and
+   starts its timer). Read the question aloud. The **NEXT QUESTION** button is
+   locked until the question closes — when the timer runs out *or* everyone has
+   answered (the panel shows a live "Answered X / Y" counter). Then click
+   **NEXT QUESTION** for each following question, and **FINISH QUIZ** on the last.
+   An **Emergency override** expander lets you force-advance if a device is stuck.
+6. **Leaderboard** tab → live ranking (score, then answering time). The toggle
+   in Quiz Control controls whether participants also see the leaderboard after
+   each question and on their result screen (on by default).
 7. **Reports** tab → **DOWNLOAD REPORT** (`Quiz Results.csv`) and
    `Detailed Quiz Responses.csv`.
 
@@ -61,7 +70,9 @@ Open the app:
 3. Answer each question before the timer runs out and press **Submit answer**.
    If the timer expires, the current selection is submitted automatically
    (or recorded as unanswered).
-4. After the quiz finishes, see your score and percentage.
+4. After each question closes you see the leaderboard so far and your position;
+   the next question appears automatically when the host advances.
+5. After the quiz finishes, see your score, percentage and final ranking.
 
 If a participant's page refreshes or the tab closes, they simply re-enter the
 same code + name + registration number to resume — their answers are safe in
@@ -128,13 +139,17 @@ server, or a laptop on the classroom Wi-Fi.
 ## 5. Tests
 
 ```bash
-python tests/simulate.py       # full quiz lifecycle + scoring + reports, no browser
-python tests/test_apptest.py   # renders every screen via Streamlit AppTest
+python tests/simulate.py         # quiz lifecycle + scoring + reports, no browser
+python tests/test_apptest.py     # renders every screen via Streamlit AppTest
+python tests/test_integration.py # full host + 2-participant live loop
 ```
 
-`simulate.py` covers: CSV parsing, 10 participants, duplicate registration
-numbers, unanswered questions, timer auto-submit, answer idempotency on refresh,
-scoring, leaderboard ordering, and both CSV reports.
+`simulate.py` covers CSV parsing, 10 participants, duplicate registration
+numbers, unanswered questions, the question-closed rules, answer idempotency on
+refresh, scoring, leaderboard ordering, and both CSV reports.
+`test_integration.py` drives the real host flow: START QUIZ, the NEXT-QUESTION
+button staying locked until the question closes, the participant leaderboard
+between questions, and FINISH QUIZ.
 
 ---
 
@@ -154,7 +169,8 @@ Interactive quiz/
 │   └── reports.py         # leaderboard + summary + detailed report (pandas)
 ├── tests/
 │   ├── simulate.py
-│   └── test_apptest.py
+│   ├── test_apptest.py
+│   └── test_integration.py
 └── .streamlit/
     ├── config.toml
     └── secrets.toml.example

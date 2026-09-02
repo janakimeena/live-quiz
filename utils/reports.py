@@ -41,9 +41,12 @@ def leaderboard_df(quiz_id: int) -> pd.DataFrame:
             "Name": s["participant"]["name"],
             "Registration No.": s["participant"]["reg_no"],
             "Score": s["score"],
+            "Time (s)": s["total_time"],
             "Percentage": f"{s['percentage']}%",
         })
-    return pd.DataFrame(rows, columns=["Rank", "Name", "Registration No.", "Score", "Percentage"])
+    return pd.DataFrame(
+        rows, columns=["Rank", "Name", "Registration No.", "Score", "Time (s)", "Percentage"]
+    )
 
 
 def summary_df(quiz_id: int) -> pd.DataFrame:

@@ -6,6 +6,7 @@ isolation and reused by the report generator.
 from __future__ import annotations
 
 import io
+import time
 from typing import Any
 
 import pandas as pd
@@ -193,3 +194,26 @@ def is_correct(question: dict, selected: Any) -> bool:
 
 def option_letters(question: dict) -> list[str]:
     return [L for L in "ABCD" if str(question.get(f"option_{L.lower()}", "")).strip()]
+
+
+# ---------------------------------------------------------------------------
+# Live-question state
+# ---------------------------------------------------------------------------
+
+def question_closed(
+    current_status: str,
+    started_at: float | None,
+    time_limit: float,
+    n_participants: int,
+    n_answered: int,
+    now: float | None = None,
+) -> bool:
+    """A running question is *closed* once either its time limit has elapsed or
+    every registered participant has submitted an answer. The host cannot move
+    to the next question until this is true."""
+    if current_status != "active" or not started_at:
+        return False
+    now = time.time() if now is None else now
+    if now - started_at >= time_limit:
+        return True
+    return n_participants > 0 and n_answered >= n_participants

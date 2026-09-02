@@ -30,6 +30,16 @@ def main() -> None:
     assert not errors, errors
     print(f"Parsed {len(rows)} questions, no errors.")
 
+    # --- question_closed rules ------------------------------------------
+    qc = quizlib.question_closed
+    assert qc("active", 1000.0, 30, 3, 3, now=1005) is True    # everyone answered
+    assert qc("active", 1000.0, 30, 3, 2, now=1005) is False   # not everyone, timer ok
+    assert qc("active", 1000.0, 30, 3, 2, now=1031) is True     # time limit reached
+    assert qc("active", 1000.0, 30, 0, 0, now=1005) is False    # nobody registered yet
+    assert qc("pending", 1000.0, 30, 3, 3, now=1005) is False   # not started
+    assert qc("active", None, 30, 3, 3, now=1005) is False      # no start timestamp
+    print("question_closed rules OK.")
+
     quiz = db.create_quiz("Simulation Quiz", rows, 30)
     quiz_id = quiz["id"]
     questions = db.get_questions(quiz_id)
